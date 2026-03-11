@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Eye Track · Calibration</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0a0a0f;
+      --surface:  #12121a;
+      --border:   #1e1e2e;
+      --dim:      #2a2a3e;
+      --muted:    #4a4a6a;
+      --text:     #c8c8e8;
+      --bright:   #e8e8ff;
+      --accent:   #7c6af7;
+      --accentlo: #7c6af722;
+      --green:    #4af7a0;
+      --amber:    #f7c94a;
+      --red:      #f76a6a;
+      --ball:     #ffffff;
+      --ball-glow:#7c6af7;
+    }
+
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: none;
+      user-select: none;
+    }
+
+    /* ── SCREENS ─────────────────────────────────── */
+    .screen {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 24px;
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.4s ease;
+    }
+    .screen.active { opacity: 1; pointer-events: all; }
+
+    /* ── HOME ────────────────────────────────────── */
+    #home {
+      gap: 0;
+      background:
+        radial-gradient(ellipse 60% 40% at 50% 0%, #7c6af711 0%, transparent 70%),
+        var(--bg);
+    }
+
+    .logo {
+      font-family: 'Syne', sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 32px;
+    }
+
+    h1 {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(28px, 8vw, 42px);
+      font-weight: 800;
+      color: var(--bright);
+      line-height: 1.1;
+      text-align: center;
+      margin-bottom: 12px;
+    }
+
+    .subtitle {
+      font-size: 12px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.7;
+      max-width: 280px;
+      margin-bottom: 40px;
+    }
+
+    .btn-group { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 300px; }
+
+    .btn {
+      width: 100%;
+      padding: 14px 20px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .btn .btn-icon {
+      width: 28px; height: 28px;
+      border-radius: 6px;
+      background: var(--accentlo);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; flex-shrink: 0;
+    }
+    .btn.primary .btn-icon { background: rgba(255,255,255,0.15); }
+    .btn .btn-label { flex: 1; }
+    .btn .btn-sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+    .btn.primary .btn-sub { color: rgba(255,255,255,0.6); }
+
+    .divider {
+      width: 100%; max-width: 300px;
+      height: 1px; background: var(--border);
+      margin: 8px 0;
+    }
+
+    /* ── STATUS BAR ───────────────────────────────── */
+    .status-bar {
+      position: absolute; top: 0; left: 0; right: 0;
+      padding: 12px 20px;
+      display: flex; align-items: center; gap: 8px;
+      font-size: 11px; color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .status-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--muted);
+      transition: background 0.3s;
+    }
+    .status-dot.recording { background: var(--red); animation: blink 1s infinite; }
+    .status-dot.ready    { background: var(--green); }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    /* ── TRIAL CANVAS SCREEN ─────────────────────── */
+    #trial {
+      padding: 0;
+      justify-content: flex-start;
+    }
+
+    #trialCanvas {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      touch-action: none;
+    }
+
+    /* ── TRIAL OVERLAY UI ────────────────────────── */
+    .trial-ui {
+      position: absolute;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .trial-header {
+      top: 0; left: 0; right: 0;
+      padding: 10px 16px;
+      display: flex; align-items: center; justify-content: space-between;
+      background: linear-gradient(var(--bg), transparent);
+    }
+    .trial-phase {
+      font-family: 'Syne', sans-serif;
+      font-size: 13px; font-weight: 700;
+      color: var(--bright);
+    }
+    .trial-counter {
+      font-size: 11px; color: var(--muted);
+    }
+    .trial-footer {
+      bottom: 0; left: 0; right: 0;
+      padding: 16px;
+      display: flex; justify-content: center;
+      background: linear-gradient(transparent, var(--bg));
+      pointer-events: all;
+    }
+
+    .btn-stop {
+      padding: 10px 28px;
+      border-radius: 40px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      cursor: pointer;
+    }
+
+    /* ── COUNTDOWN OVERLAY ───────────────────────── */
+    #countdown {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--bg);
+      z-index: 20;
+      pointer-events: none;
+    }
+    #countdown.hidden { display: none; }
+    .countdown-num {
+      font-family: 'Syne', sans-serif;
+      font-size: 96px; font-weight: 800;
+      color: var(--accent);
+      animation: countPulse 1s ease-out;
+    }
+    @keyframes countPulse {
+      0%   { transform: scale(1.4); opacity: 0; }
+      30%  { transform: scale(1.0); opacity: 1; }
+      80%  { transform: scale(1.0); opacity: 1; }
+      100% { transform: scale(0.8); opacity: 0; }
+    }
+
+    /* ── RESULTS SCREEN ──────────────────────────── */
+    #results {
+      gap: 16px;
+      background:
+        radial-gradient(ellipse 50% 30% at 50% 100%, #4af7a011 0%, transparent 70%),
+        var(--bg);
+    }
+
+    .results-header {
+      font-family: 'Syne', sans-serif;
+      font-size: 22px; font-weight: 800;
+      color: var(--bright);
+      text-align: center;
+    }
+
+    .result-cards {
+      width: 100%; max-width: 320px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+
+    .result-card {
+      padding: 14px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .result-card .label { font-size: 11px; color: var(--muted); }
+    .result-card .value {
+      font-family: 'Syne', sans-serif;
+      font-size: 15px; font-weight: 700;
+      color: var(--bright);
+    }
+    .result-card .value.green { color: var(--green); }
+    .result-card .value.amber { color: var(--amber); }
+
+    .export-section {
+      width: 100%; max-width: 320px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+
+    .export-label {
+      font-size: 10px; color: var(--muted);
+      letter-spacing: 0.15em; text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+
+    /* ── PERMISSION SCREEN ───────────────────────── */
+    #permission {
+      gap: 20px;
+      text-align: center;
+    }
+    .perm-icon { font-size: 48px; }
+    .perm-title {
+      font-family: 'Syne', sans-serif;
+      font-size: 20px; font-weight: 700;
+      color: var(--bright);
+    }
+    .perm-body {
+      font-size: 12px; color: var(--muted);
+      line-height: 1.7; max-width: 260px;
+    }
+    .perm-error {
+      font-size: 11px; color: var(--red);
+      display: none;
+    }
+    .perm-error.show { display: block; }
+
+    /* ── HIDDEN VIDEO ────────────────────────────── */
+    #previewVideo {
+      position: fixed;
+      width: 1px; height: 1px;
+      opacity: 0; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<video id="previewVideo" autoplay playsinline muted></video>
+
+<!-- ── HOME ───────────────────────────────────────── -->
+<div class="screen active" id="home">
+  <div class="logo">MOT · Eye Lab</div>
+  <h1>Gaze<br>Calibration</h1>
+  <p class="subtitle">Record front-camera video synced to known target positions for offline gaze extraction.</p>
+
+  <div class="btn-group">
+    <button class="btn primary" onclick="startFlow('corners')">
+      <div class="btn-icon">⊕</div>
+      <div class="btn-label">
+        <div>Corner Calibration</div>
+        <div class="btn-sub">5 points · corners + centre · ~20s</div>
+      </div>
+    </button>
+
+    <button class="btn" onclick="startFlow('fig8')">
+      <div class="btn-icon">∞</div>
+      <div class="btn-label">
+        <div>Figure-8 Lag Test</div>
+        <div class="btn-sub">Continuous path · pursuit tracking · ~30s</div>
+      </div>
+    </button>
+
+    <div class="divider"></div>
+
+    <button class="btn" onclick="startFlow('box')">
+      <div class="btn-icon">□</div>
+      <div class="btn-label">
+        <div>Box Path</div>
+        <div class="btn-sub">Sharp corners · saccade latency · ~20s</div>
+      </div>
+    </button>
+
+    <button class="btn" onclick="startFlow('arena')">
+      <div class="btn-icon">◎</div>
+      <div class="btn-label">
+        <div>Arena Circle</div>
+        <div class="btn-sub">MOT boundary · full eccentricity · ~25s</div>
+      </div>
+    </button>
+  </div>
+</div>
+
+<!-- ── PERMISSION ──────────────────────────────────── -->
+<div class="screen" id="permission">
+  <div class="perm-icon">📷</div>
+  <div class="perm-title">Camera Access</div>
+  <p class="perm-body">Front camera needed to record your face during the calibration. Video stays on your device until you export it.</p>
+  <div class="btn-group" style="max-width:260px">
+    <button class="btn primary" id="permBtn" onclick="requestCamera()">
+      <div class="btn-icon">✓</div>
+      <div class="btn-label"><div>Allow Camera</div></div>
+    </button>
+  </div>
+  <div class="perm-error" id="permError">Camera access denied. Please enable in Settings → Safari.</div>
+</div>
+
+<!-- ── TRIAL ───────────────────────────────────────── -->
+<div class="screen" id="trial">
+  <canvas id="trialCanvas"></canvas>
+
+  <div class="trial-ui trial-header">
+    <div class="trial-phase" id="trialPhase">Follow the dot</div>
+    <div class="trial-counter" id="trialCounter"></div>
+  </div>
+
+  <div class="status-bar" style="top:44px; border-top:1px solid var(--border)">
+    <div class="status-dot" id="recDot"></div>
+    <span id="recLabel">waiting</span>
+    <span style="margin-left:auto; font-variant-numeric:tabular-nums" id="recTimer">0.0s</span>
+  </div>
+
+  <div class="trial-ui trial-footer">
+    <button class="btn-stop" onclick="stopTrial()">■ stop</button>
+  </div>
+
+  <div id="countdown" class="hidden">
+    <div class="countdown-num" id="countdownNum">3</div>
+  </div>
+</div>
+
+<!-- ── RESULTS ─────────────────────────────────────── -->
+<div class="screen" id="results">
+  <div class="results-header" id="resultsTitle">Complete</div>
+
+  <div class="result-cards">
+    <div class="result-card">
+      <div class="label">Trial type</div>
+      <div class="value" id="resType">—</div>
+    </div>
+    <div class="result-card">
+      <div class="label">Duration</div>
+      <div class="value green" id="resDur">—</div>
+    </div>
+    <div class="result-card">
+      <div class="label">Ball samples logged</div>
+      <div class="value" id="resSamples">—</div>
+    </div>
+    <div class="result-card">
+      <div class="label">Video recorded</div>
+      <div class="value" id="resVideo">—</div>
+    </div>
+  </div>
+
+  <div class="export-section">
+    <div class="export-label">Export</div>
+    <button class="btn" id="exportVideoBtn" onclick="exportVideo()">
+      <div class="btn-icon">🎥</div>
+      <div class="btn-label">
+        <div>Download Video</div>
+        <div class="btn-sub" id="exportVideoSize">—</div>
+      </div>
+    </button>
+    <button class="btn" onclick="exportCSV()">
+      <div class="btn-icon">📊</div>
+      <div class="btn-label">
+        <div>Download Ball Log (CSV)</div>
+        <div class="btn-sub" id="exportCSVRows">—</div>
+      </div>
+    </button>
+    <button class="btn" onclick="exportJSON()">
+      <div class="btn-icon">{ }</div>
+      <div class="btn-label">
+        <div>Download Full Session (JSON)</div>
+        <div class="btn-sub">timestamps · path · metadata</div>
+      </div>
+    </button>
+  </div>
+
+  <div class="btn-group" style="max-width:320px; margin-top:4px">
+    <button class="btn primary" onclick="goHome()">
+      <div class="btn-icon">↩</div>
+      <div class="btn-label"><div>New Trial</div></div>
+    </button>
+  </div>
+</div>
+
+<script src="app.js?v=1773194085"></script>
+</body>
+</html>

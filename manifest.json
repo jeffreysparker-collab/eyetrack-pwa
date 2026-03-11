@@ -1,0 +1,16 @@
+{
+  "name": "Eye Track Calibration",
+  "short_name": "EyeTrack",
+  "start_url": "/eyetrack-pwa/",
+  "display": "fullscreen",
+  "orientation": "portrait",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ]
+}
