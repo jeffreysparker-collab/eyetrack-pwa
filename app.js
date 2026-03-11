@@ -1,5 +1,5 @@
 // ── app.js ────────────────────────────────────────────────────────────────
-// Eye-track calibration PWA
+// Eye-track calibration PWA  –  v2 (9-point numpad, white screen, black ball)
 // All times in ms from trial start (performance.now() offset)
 // Ball positions in normalised screen coords [0,1] and pixels
 // ──────────────────────────────────────────────────────────────────────────
@@ -13,7 +13,7 @@ if ('serviceWorker' in navigator) {
 
 // ── State ──────────────────────────────────────────────────────────────────
 const state = {
-  mode:          null,      // 'corners' | 'fig8' | 'box' | 'arena'
+  mode:          null,      // 'corners' | 'fig8' | 'box' | 'arena' | 'numpad9'
   cameraStream:  null,
   mediaRecorder: null,
   videoChunks:   [],
@@ -25,15 +25,83 @@ const state = {
   timerInterval: null,
 };
 
+// ── Utility ────────────────────────────────────────────────────────────────
+function easeInOut(t) {
+  return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+}
+
+/** Fisher-Yates shuffle (in-place, returns array) */
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 // ── Path generators ────────────────────────────────────────────────────────
 
 /**
+ * numpad9: 9-point grid (corners + mid-edges + centre)
+ * Randomises visit order on each call.
+ * Dwell ≥ 2 s per point; smooth lerp between.
+ */
+function makeNumpad9Path(W, H) {
+  const PAD      = 0.10;   // normalised inset from screen edge
+  const DWELL_MS = 2500;   // ≥ 2 s per point
+  const MOVE_MS  = 500;    // transition
+  const HOLD_MS  = DWELL_MS + MOVE_MS;
+
+  // Define all 9 points in numpad layout (7=TL, 8=TC, 9=TR … 1=BL, 2=BC, 3=BR)
+  const allPoints = [
+    { x: PAD,       y: PAD,       label: 'NW' },   // 7
+    { x: 0.5,       y: PAD,       label: 'N'  },   // 8
+    { x: 1 - PAD,   y: PAD,       label: 'NE' },   // 9
+    { x: PAD,       y: 0.5,       label: 'W'  },   // 4
+    { x: 0.5,       y: 0.5,       label: 'C'  },   // 5
+    { x: 1 - PAD,   y: 0.5,       label: 'E'  },   // 6
+    { x: PAD,       y: 1 - PAD,   label: 'SW' },   // 1
+    { x: 0.5,       y: 1 - PAD,   label: 'S'  },   // 2
+    { x: 1 - PAD,   y: 1 - PAD,   label: 'SE' },   // 3
+  ];
+
+  // Randomise order; append first point again to complete the last lerp cleanly
+  const sequence = shuffle([...allPoints]);
+  const TOTAL_MS = sequence.length * HOLD_MS;
+
+  return function(t_ms) {
+    const tmod = Math.min(t_ms, TOTAL_MS - 1);
+    const seg  = Math.min(Math.floor(tmod / HOLD_MS), sequence.length - 1);
+    const into = tmod % HOLD_MS;
+    const cur  = sequence[seg];
+    const nxt  = sequence[(seg + 1) % sequence.length];
+
+    let x, y;
+    if (into < DWELL_MS) {
+      x = cur.x; y = cur.y;
+    } else {
+      const alpha = easeInOut((into - DWELL_MS) / MOVE_MS);
+      x = cur.x + (nxt.x - cur.x) * alpha;
+      y = cur.y + (nxt.y - cur.y) * alpha;
+    }
+
+    return {
+      x_norm: x, y_norm: y,
+      phase: cur.label,
+      done: tmod >= TOTAL_MS - 50,
+      total_ms: TOTAL_MS,
+      point_index: seg,
+      point_total: sequence.length,
+      dwell_pct: Math.min(into / DWELL_MS, 1),
+    };
+  };
+}
+
+/**
  * corners: dwell at 5 positions (TL, TR, BR, BL, C)
- * Returns fn(t_ms) -> {x_norm, y_norm, phase}
- * Each position held for DWELL_MS, smooth lerp between in MOVE_MS
  */
 function makeCornersPath(W, H) {
-  const PAD      = 0.08;   // normalised padding from edge
+  const PAD      = 0.08;
   const DWELL_MS = 2500;
   const MOVE_MS  = 600;
   const HOLD_MS  = DWELL_MS + MOVE_MS;
@@ -68,47 +136,46 @@ function makeCornersPath(W, H) {
       phase: cur.label,
       done: tmod >= total - 50,
       total_ms: total,
+      dwell_pct: Math.min(into / DWELL_MS, 1),
     };
   };
 }
 
 /**
- * fig8: lemniscate of Bernoulli centred on screen
- * Parametric: x = a·cos(t)/(1+sin²(t)),  y = a·sin(t)·cos(t)/(1+sin²(t))
+ * fig8: lemniscate of Bernoulli
  */
 function makeFig8Path(W, H) {
-  const PERIOD_MS = 6000;   // one full figure-8
+  const PERIOD_MS = 6000;
   const LOOPS     = 4;
   const TOTAL_MS  = PERIOD_MS * LOOPS;
-  const scaleX    = 0.38;   // normalised amplitude
+  const scaleX    = 0.38;
   const scaleY    = 0.32;
 
   return function(t_ms) {
-    const tmod = Math.min(t_ms, TOTAL_MS - 1);
+    const tmod  = Math.min(t_ms, TOTAL_MS - 1);
     const theta = (tmod / PERIOD_MS) * 2 * Math.PI;
     const denom = 1 + Math.sin(theta) * Math.sin(theta);
-    const x_norm = 0.5 + scaleX * Math.cos(theta) / denom;
-    const y_norm = 0.5 + scaleY * Math.sin(theta) * Math.cos(theta) / denom;
     return {
-      x_norm, y_norm,
+      x_norm: 0.5 + scaleX * Math.cos(theta) / denom,
+      y_norm: 0.5 + scaleY * Math.sin(theta) * Math.cos(theta) / denom,
       phase: `loop-${Math.floor(tmod / PERIOD_MS) + 1}`,
       done: tmod >= TOTAL_MS - 50,
       total_ms: TOTAL_MS,
+      dwell_pct: 1,
     };
   };
 }
 
 /**
- * box: ball traces a rectangle with sharp corners (saccade test)
+ * box: rectangle saccade test
  */
 function makeBoxPath(W, H) {
   const PAD      = 0.12;
-  const SIDE_MS  = 1800;   // time per side
-  const PAUSE_MS = 400;    // dwell at each corner
+  const SIDE_MS  = 1800;
+  const PAUSE_MS = 400;
   const SEG_MS   = SIDE_MS + PAUSE_MS;
   const LOOPS    = 3;
 
-  // corners: TL → TR → BR → BL → TL
   const corners = [
     { x: PAD,       y: PAD       },
     { x: 1 - PAD,   y: PAD       },
@@ -137,6 +204,7 @@ function makeBoxPath(W, H) {
       phase: `corner-${seg}`,
       done: tmod >= TOTAL_MS - 50,
       total_ms: TOTAL_MS,
+      dwell_pct: 1,
     };
   };
 }
@@ -145,7 +213,7 @@ function makeBoxPath(W, H) {
  * arena: circle matching MOT arena radius
  */
 function makeArenaPath(W, H) {
-  const RADIUS_NORM = 0.42;  // ~arena edge
+  const RADIUS_NORM = 0.42;
   const PERIOD_MS   = 5000;
   const LOOPS       = 4;
   const TOTAL_MS    = PERIOD_MS * LOOPS;
@@ -159,20 +227,18 @@ function makeArenaPath(W, H) {
       phase: `loop-${Math.floor(tmod / PERIOD_MS) + 1}`,
       done: tmod >= TOTAL_MS - 50,
       total_ms: TOTAL_MS,
+      dwell_pct: 1,
     };
   };
 }
 
-function easeInOut(t) {
-  return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
-}
-
 function getPathFn(mode, W, H) {
   switch (mode) {
-    case 'corners': return makeCornersPath(W, H);
-    case 'fig8':    return makeFig8Path(W, H);
-    case 'box':     return makeBoxPath(W, H);
-    case 'arena':   return makeArenaPath(W, H);
+    case 'numpad9':  return makeNumpad9Path(W, H);
+    case 'corners':  return makeCornersPath(W, H);
+    case 'fig8':     return makeFig8Path(W, H);
+    case 'box':      return makeBoxPath(W, H);
+    case 'arena':    return makeArenaPath(W, H);
   }
 }
 
@@ -227,15 +293,16 @@ function startFlow(mode) {
 
 function startTrial() {
   showScreen('trial');
-  state.ballLog   = [];
+  state.ballLog    = [];
   state.videoChunks = [];
-  state.videoBlob = null;
+  state.videoBlob  = null;
 
   const canvas = document.getElementById('trialCanvas');
   canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
 
   const modeLabels = {
+    numpad9: '9-Point Calibration',
     corners: 'Corner Calibration',
     fig8:    'Figure-8 Lag Test',
     box:     'Box Path',
@@ -243,7 +310,6 @@ function startTrial() {
   };
   document.getElementById('trialPhase').textContent = modeLabels[state.mode] || state.mode;
 
-  // countdown then go
   runCountdown(3, () => {
     startRecording();
     runAnimation();
@@ -262,7 +328,6 @@ function runCountdown(n, cb) {
       return;
     }
     num.textContent = i;
-    // re-trigger animation
     num.style.animation = 'none';
     num.offsetHeight;
     num.style.animation = '';
@@ -292,9 +357,8 @@ function startRecording() {
     state.mediaRecorder.ondataavailable = e => {
       if (e.data && e.data.size > 0) state.videoChunks.push(e.data);
     };
-    state.mediaRecorder.start(100); // 100ms chunks
+    state.mediaRecorder.start(100);
 
-    // Update UI
     const dot   = document.getElementById('recDot');
     const label = document.getElementById('recLabel');
     dot.classList.add('recording');
@@ -330,28 +394,25 @@ function runAnimation() {
   const W      = canvas.width;
   const H      = canvas.height;
   const pathFn = getPathFn(state.mode, W, H);
-  const BALL_R = Math.min(W, H) * 0.022; // ~2.2% of shorter dim
+
+  // Ball radius: ~2% of shorter dimension
+  const BALL_R = Math.min(W, H) * 0.020;
 
   state.t0 = performance.now();
 
-  // Timer display
+  // HUD elements – these live outside the canvas so they never occlude the ball
   const timerEl = document.getElementById('recTimer');
-  const phaseEl = document.getElementById('trialPhase');
   const ctrEl   = document.getElementById('trialCounter');
 
-  // Trail buffer for smooth path visualisation
-  const trail = [];
-  const MAX_TRAIL = 40;
-
   function frame() {
-    const now    = performance.now();
-    const t_ms   = now - state.t0;
-    const pos    = pathFn(t_ms);
+    const now  = performance.now();
+    const t_ms = now - state.t0;
+    const pos  = pathFn(t_ms);
 
-    const x_px   = pos.x_norm * W;
-    const y_px   = pos.y_norm * H;
+    const x_px = pos.x_norm * W;
+    const y_px = pos.y_norm * H;
 
-    // Log ball position
+    // Log
     state.ballLog.push({
       t_ms:   Math.round(t_ms),
       x_px:   Math.round(x_px * 10) / 10,
@@ -361,109 +422,75 @@ function runAnimation() {
       phase:  pos.phase,
     });
 
-    trail.push({ x: x_px, y: y_px });
-    if (trail.length > MAX_TRAIL) trail.shift();
-
-    // ── Draw ────────────────────────────────────────
+    // ── Draw ───────────────────────────────────────────────────────────────
     ctx.clearRect(0, 0, W, H);
 
-    // Background
-    ctx.fillStyle = '#0a0a0f';
+    // White background for soft face illumination
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, W, H);
 
-    // Grid lines (subtle)
-    ctx.strokeStyle = '#1e1e2e';
-    ctx.lineWidth = 0.5;
-    for (let gx = 0; gx <= 4; gx++) {
-      ctx.beginPath();
-      ctx.moveTo(gx * W / 4, 0);
-      ctx.lineTo(gx * W / 4, H);
-      ctx.stroke();
-    }
-    for (let gy = 0; gy <= 8; gy++) {
-      ctx.beginPath();
-      ctx.moveTo(0, gy * H / 8);
-      ctx.lineTo(W, gy * H / 8);
-      ctx.stroke();
-    }
-
-    // Trail
-    if (trail.length > 1) {
-      for (let i = 1; i < trail.length; i++) {
-        const alpha = i / trail.length;
-        ctx.strokeStyle = `rgba(124, 106, 247, ${alpha * 0.4})`;
-        ctx.lineWidth   = BALL_R * 0.4 * alpha;
-        ctx.lineCap     = 'round';
-        ctx.beginPath();
-        ctx.moveTo(trail[i-1].x, trail[i-1].y);
-        ctx.lineTo(trail[i].x,   trail[i].y);
-        ctx.stroke();
-      }
-    }
-
-    // Corner markers (for corners mode)
-    if (state.mode === 'corners') {
-      const PAD = 0.08;
-      const pts = [
-        [PAD*W, PAD*H], [(1-PAD)*W, PAD*H],
-        [(1-PAD)*W, (1-PAD)*H], [PAD*W, (1-PAD)*H],
-        [0.5*W, 0.5*H]
+    // ── 9-point guide dots (numpad9 mode only) ─────────────────────────────
+    if (state.mode === 'numpad9') {
+      const PAD = 0.10;
+      const guidePositions = [
+        { x: PAD,       y: PAD       },
+        { x: 0.5,       y: PAD       },
+        { x: 1 - PAD,   y: PAD       },
+        { x: PAD,       y: 0.5       },
+        { x: 0.5,       y: 0.5       },
+        { x: 1 - PAD,   y: 0.5       },
+        { x: PAD,       y: 1 - PAD   },
+        { x: 0.5,       y: 1 - PAD   },
+        { x: 1 - PAD,   y: 1 - PAD   },
       ];
-      pts.forEach(([px, py]) => {
-        ctx.strokeStyle = '#2a2a3e';
-        ctx.lineWidth = 1;
-        const sz = BALL_R * 0.8;
+      guidePositions.forEach(p => {
+        const gx = p.x * W;
+        const gy = p.y * H;
+        ctx.strokeStyle = 'rgba(0,0,0,0.10)';
+        ctx.lineWidth   = 1;
+        const sz = BALL_R * 0.7;
         ctx.beginPath();
-        ctx.moveTo(px - sz, py); ctx.lineTo(px + sz, py);
-        ctx.moveTo(px, py - sz); ctx.lineTo(px, py + sz);
+        ctx.moveTo(gx - sz, gy); ctx.lineTo(gx + sz, gy);
+        ctx.moveTo(gx, gy - sz); ctx.lineTo(gx, gy + sz);
         ctx.stroke();
       });
     }
 
-    // Arena circle (for arena mode)
-    if (state.mode === 'arena') {
-      const r = Math.min(W, H) * 0.42;
-      ctx.strokeStyle = '#1e1e2e';
-      ctx.lineWidth   = 1;
-      ctx.setLineDash([4, 8]);
+    // ── Dwell ring (shrinks to zero over the dwell period) ─────────────────
+    if (pos.dwell_pct !== undefined && pos.dwell_pct < 1) {
+      const ringR = BALL_R * (2.8 - 1.8 * pos.dwell_pct);
+      ctx.strokeStyle = `rgba(0,0,0,${0.18 * (1 - pos.dwell_pct)})`;
+      ctx.lineWidth   = 1.5;
       ctx.beginPath();
-      ctx.arc(W/2, H/2, r, 0, Math.PI * 2);
+      ctx.arc(x_px, y_px, ringR, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.setLineDash([]);
     }
 
-    // Glow
-    const glow = ctx.createRadialGradient(x_px, y_px, 0, x_px, y_px, BALL_R * 4);
-    glow.addColorStop(0, 'rgba(124,106,247,0.35)');
-    glow.addColorStop(1, 'rgba(124,106,247,0)');
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(x_px, y_px, BALL_R * 4, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Ball
-    ctx.fillStyle = '#ffffff';
-    ctx.shadowColor = '#7c6af7';
-    ctx.shadowBlur  = BALL_R * 2;
+    // ── Ball: solid black circle ───────────────────────────────────────────
+    ctx.fillStyle = '#000000';
     ctx.beginPath();
     ctx.arc(x_px, y_px, BALL_R, 0, Math.PI * 2);
     ctx.fill();
-    ctx.shadowBlur = 0;
 
-    // Phase label under ball
-    ctx.fillStyle = 'rgba(74,247,160,0.7)';
-    ctx.font      = `${Math.round(BALL_R * 0.9)}px DM Mono, monospace`;
-    ctx.textAlign = 'center';
-    ctx.fillText(pos.phase, x_px, y_px + BALL_R * 2.8);
-
-    // Progress bar
+    // ── Progress bar – very bottom of screen, 2 px tall ───────────────────
     const pct = Math.min(t_ms / pos.total_ms, 1);
-    ctx.fillStyle = '#1e1e2e';
-    ctx.fillRect(0, H - 3, W, 3);
-    ctx.fillStyle = '#7c6af7';
-    ctx.fillRect(0, H - 3, W * pct, 3);
+    ctx.fillStyle = 'rgba(0,0,0,0.08)';
+    ctx.fillRect(0, H - 2, W, 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(0, H - 2, W * pct, 2);
 
-    // UI timer
+    // ── Point counter for numpad9 (tiny, bottom-left corner) ──────────────
+    if (state.mode === 'numpad9' && pos.point_total !== undefined) {
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.font      = `${Math.round(BALL_R * 0.85)}px monospace`;
+      ctx.textAlign = 'left';
+      ctx.fillText(
+        `${pos.point_index + 1} / ${pos.point_total}  ${pos.phase}`,
+        12, H - 10
+      );
+    }
+
+    // ── HUD timer (DOM, outside canvas – no occlusion risk) ───────────────
     timerEl.textContent = (t_ms / 1000).toFixed(1) + 's';
     ctrEl.textContent   = state.ballLog.length + ' pts';
 
@@ -487,12 +514,12 @@ async function stopTrial() {
 
   await stopRecording();
 
-  // Populate results
   const dur_s = state.ballLog.length > 0
     ? (state.ballLog[state.ballLog.length - 1].t_ms / 1000).toFixed(1)
     : '0';
 
   const modeLabels = {
+    numpad9: '9-Point Cal.',
     corners: 'Corner Cal.',
     fig8:    'Figure-8',
     box:     'Box Path',
@@ -505,12 +532,12 @@ async function stopTrial() {
 
   if (state.videoBlob) {
     const mb = (state.videoBlob.size / 1048576).toFixed(1);
-    document.getElementById('resVideo').textContent      = mb + ' MB';
-    document.getElementById('resVideo').className        = 'value green';
+    document.getElementById('resVideo').textContent        = mb + ' MB';
+    document.getElementById('resVideo').className          = 'value green';
     document.getElementById('exportVideoSize').textContent = mb + ' MB · tap to save';
   } else {
-    document.getElementById('resVideo').textContent = 'Not available';
-    document.getElementById('resVideo').className   = 'value amber';
+    document.getElementById('resVideo').textContent        = 'Not available';
+    document.getElementById('resVideo').className          = 'value amber';
     document.getElementById('exportVideoSize').textContent = 'Recording unavailable';
   }
 
@@ -540,13 +567,13 @@ function exportCSV() {
 
 function exportJSON() {
   const session = {
-    version:      1,
-    mode:         state.mode,
-    timestamp_iso: new Date().toISOString(),
-    screen_w_px:  window.innerWidth,
-    screen_h_px:  window.innerHeight,
-    device_px_ratio: window.devicePixelRatio || 1,
-    ball_log:     state.ballLog,
+    version:          2,
+    mode:             state.mode,
+    timestamp_iso:    new Date().toISOString(),
+    screen_w_px:      window.innerWidth,
+    screen_h_px:      window.innerHeight,
+    device_px_ratio:  window.devicePixelRatio || 1,
+    ball_log:         state.ballLog,
   };
   const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
   downloadBlob(blob, `eyetrack_${state.mode}_${Date.now()}.json`);
