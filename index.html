@@ -27,8 +27,6 @@
       --green:    #4af7a0;
       --amber:    #f7c94a;
       --red:      #f76a6a;
-      --ball:     #ffffff;
-      --ball-glow:#7c6af7;
     }
 
     html, body {
@@ -132,25 +130,17 @@
       margin: 8px 0;
     }
 
-    /* ── STATUS BAR ───────────────────────────────── */
-    .status-bar {
-      position: absolute; top: 0; left: 0; right: 0;
-      padding: 12px 20px;
-      display: flex; align-items: center; gap: 8px;
-      font-size: 11px; color: var(--muted);
-      border-bottom: 1px solid var(--border);
-      background: var(--bg);
-    }
+    /* ── STATUS DOT (used in results only now) ────── */
     .status-dot {
       width: 6px; height: 6px; border-radius: 50%;
       background: var(--muted);
       transition: background 0.3s;
     }
     .status-dot.recording { background: var(--red); animation: blink 1s infinite; }
-    .status-dot.ready    { background: var(--green); }
+    .status-dot.ready     { background: var(--green); }
     @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
-    /* ── TRIAL CANVAS SCREEN ─────────────────────── */
+    /* ── TRIAL SCREEN ────────────────────────────── */
     #trial {
       padding: 0;
       justify-content: flex-start;
@@ -162,32 +152,29 @@
       touch-action: none;
     }
 
-    /* ── TRIAL OVERLAY UI ────────────────────────── */
-    .trial-ui {
+    /*
+     * ALL trial overlays are hidden during the trial.
+     * Only the canvas is visible — nothing occludes calibration targets.
+     * The stop button sits at bottom with pointer-events so it still works.
+     */
+    .trial-overlay {
       position: absolute;
       pointer-events: none;
       z-index: 10;
+      /* Hidden by default during trial; JS never needs to touch these */
+      opacity: 0;
+      transition: opacity 0.2s;
     }
-    .trial-header {
-      top: 0; left: 0; right: 0;
-      padding: 10px 16px;
-      display: flex; align-items: center; justify-content: space-between;
-      background: linear-gradient(var(--bg), transparent);
-    }
-    .trial-phase {
-      font-family: 'Syne', sans-serif;
-      font-size: 13px; font-weight: 700;
-      color: var(--bright);
-    }
-    .trial-counter {
-      font-size: 11px; color: var(--muted);
-    }
-    .trial-footer {
+    /* Only the stop button stays interactive */
+    #trialStopBar {
+      position: absolute;
       bottom: 0; left: 0; right: 0;
-      padding: 16px;
+      padding: 20px;
       display: flex; justify-content: center;
-      background: linear-gradient(transparent, var(--bg));
       pointer-events: all;
+      z-index: 10;
+      /* Completely transparent — tap target exists but nothing visible */
+      opacity: 0;
     }
 
     .btn-stop {
@@ -311,11 +298,11 @@
   <p class="subtitle">Record front-camera video synced to known target positions for offline gaze extraction.</p>
 
   <div class="btn-group">
-    <button class="btn primary" onclick="startFlow('corners')">
-      <div class="btn-icon">⊕</div>
+    <button class="btn primary" onclick="startFlow('numpad9')">
+      <div class="btn-icon">⊞</div>
       <div class="btn-label">
-        <div>Corner Calibration</div>
-        <div class="btn-sub">5 points · corners + centre · ~20s</div>
+        <div>9-Point Calibration</div>
+        <div class="btn-sub">Corners · mid-edges · centre · randomised · ~28s</div>
       </div>
     </button>
 
@@ -363,26 +350,32 @@
 
 <!-- ── TRIAL ───────────────────────────────────────── -->
 <div class="screen" id="trial">
+
+  <!-- Full-screen canvas. This is the ONLY thing visible during the trial. -->
   <canvas id="trialCanvas"></canvas>
 
-  <div class="trial-ui trial-header">
-    <div class="trial-phase" id="trialPhase">Follow the dot</div>
-    <div class="trial-counter" id="trialCounter"></div>
-  </div>
-
-  <div class="status-bar" style="top:44px; border-top:1px solid var(--border)">
-    <div class="status-dot" id="recDot"></div>
-    <span id="recLabel">waiting</span>
-    <span style="margin-left:auto; font-variant-numeric:tabular-nums" id="recTimer">0.0s</span>
-  </div>
-
-  <div class="trial-ui trial-footer">
+  <!--
+    Stop button: opacity:0 so it's invisible but still tappable.
+    Positioned at bottom-centre where it won't interfere with any target.
+  -->
+  <div id="trialStopBar">
     <button class="btn-stop" onclick="stopTrial()">■ stop</button>
   </div>
 
+  <!-- Countdown: full-screen overlay, shown before trial starts -->
   <div id="countdown" class="hidden">
     <div class="countdown-num" id="countdownNum">3</div>
   </div>
+
+  <!--
+    Hidden DOM elements still referenced by app.js for state.
+    Invisible, zero-size, out of flow — they hold values but render nothing.
+  -->
+  <span id="trialPhase"  style="display:none"></span>
+  <span id="trialCounter" style="display:none"></span>
+  <span id="recDot"      style="display:none"></span>
+  <span id="recLabel"    style="display:none"></span>
+  <span id="recTimer"    style="display:none"></span>
 </div>
 
 <!-- ── RESULTS ─────────────────────────────────────── -->
@@ -441,6 +434,6 @@
   </div>
 </div>
 
-<script src="app.js?v=1773194085"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

@@ -13,15 +13,14 @@ if ('serviceWorker' in navigator) {
 
 // ── State ──────────────────────────────────────────────────────────────────
 const state = {
-  mode:          null,      // 'corners' | 'fig8' | 'box' | 'arena' | 'numpad9'
+  mode:          null,   // 'numpad9' | 'fig8' | 'box' | 'arena'
   cameraStream:  null,
   mediaRecorder: null,
   videoChunks:   [],
   videoBlob:     null,
-  ballLog:       [],        // [{t_ms, x_px, y_px, x_norm, y_norm, phase}]
-  t0:            null,      // performance.now() at trial start
+  ballLog:       [],     // [{t_ms, x_px, y_px, x_norm, y_norm, phase}]
+  t0:            null,   // performance.now() at trial start
   animId:        null,
-  phase:         null,
   timerInterval: null,
 };
 
@@ -30,7 +29,6 @@ function easeInOut(t) {
   return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
 }
 
-/** Fisher-Yates shuffle (in-place, returns array) */
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -43,29 +41,27 @@ function shuffle(arr) {
 
 /**
  * numpad9: 9-point grid (corners + mid-edges + centre)
- * Randomises visit order on each call.
- * Dwell ≥ 2 s per point; smooth lerp between.
+ * Visit order is RANDOMISED every trial.
+ * 2500 ms dwell per point + 500 ms smooth transition = ~27 s total.
  */
 function makeNumpad9Path(W, H) {
-  const PAD      = 0.10;   // normalised inset from screen edge
-  const DWELL_MS = 2500;   // ≥ 2 s per point
-  const MOVE_MS  = 500;    // transition
+  const PAD      = 0.10;
+  const DWELL_MS = 2500;
+  const MOVE_MS  = 500;
   const HOLD_MS  = DWELL_MS + MOVE_MS;
 
-  // Define all 9 points in numpad layout (7=TL, 8=TC, 9=TR … 1=BL, 2=BC, 3=BR)
   const allPoints = [
-    { x: PAD,       y: PAD,       label: 'NW' },   // 7
-    { x: 0.5,       y: PAD,       label: 'N'  },   // 8
-    { x: 1 - PAD,   y: PAD,       label: 'NE' },   // 9
-    { x: PAD,       y: 0.5,       label: 'W'  },   // 4
-    { x: 0.5,       y: 0.5,       label: 'C'  },   // 5
-    { x: 1 - PAD,   y: 0.5,       label: 'E'  },   // 6
-    { x: PAD,       y: 1 - PAD,   label: 'SW' },   // 1
-    { x: 0.5,       y: 1 - PAD,   label: 'S'  },   // 2
-    { x: 1 - PAD,   y: 1 - PAD,   label: 'SE' },   // 3
+    { x: PAD,       y: PAD,       label: 'NW' },
+    { x: 0.5,       y: PAD,       label: 'N'  },
+    { x: 1 - PAD,   y: PAD,       label: 'NE' },
+    { x: PAD,       y: 0.5,       label: 'W'  },
+    { x: 0.5,       y: 0.5,       label: 'C'  },
+    { x: 1 - PAD,   y: 0.5,       label: 'E'  },
+    { x: PAD,       y: 1 - PAD,   label: 'SW' },
+    { x: 0.5,       y: 1 - PAD,   label: 'S'  },
+    { x: 1 - PAD,   y: 1 - PAD,   label: 'SE' },
   ];
 
-  // Randomise order; append first point again to complete the last lerp cleanly
   const sequence = shuffle([...allPoints]);
   const TOTAL_MS = sequence.length * HOLD_MS;
 
@@ -92,50 +88,6 @@ function makeNumpad9Path(W, H) {
       total_ms: TOTAL_MS,
       point_index: seg,
       point_total: sequence.length,
-      dwell_pct: Math.min(into / DWELL_MS, 1),
-    };
-  };
-}
-
-/**
- * corners: dwell at 5 positions (TL, TR, BR, BL, C)
- */
-function makeCornersPath(W, H) {
-  const PAD      = 0.08;
-  const DWELL_MS = 2500;
-  const MOVE_MS  = 600;
-  const HOLD_MS  = DWELL_MS + MOVE_MS;
-
-  const points = [
-    { x: PAD,       y: PAD,       label: 'top-left'     },
-    { x: 1 - PAD,   y: PAD,       label: 'top-right'    },
-    { x: 1 - PAD,   y: 1 - PAD,   label: 'bottom-right' },
-    { x: PAD,       y: 1 - PAD,   label: 'bottom-left'  },
-    { x: 0.5,       y: 0.5,       label: 'centre'       },
-  ];
-
-  const total = points.length * HOLD_MS;
-
-  return function(t_ms) {
-    const tmod = Math.min(t_ms, total - 1);
-    const seg  = Math.floor(tmod / HOLD_MS);
-    const into = tmod % HOLD_MS;
-    const cur  = points[seg];
-    const nxt  = points[(seg + 1) % points.length];
-
-    let x, y;
-    if (into < DWELL_MS) {
-      x = cur.x; y = cur.y;
-    } else {
-      const alpha = easeInOut((into - DWELL_MS) / MOVE_MS);
-      x = cur.x + (nxt.x - cur.x) * alpha;
-      y = cur.y + (nxt.y - cur.y) * alpha;
-    }
-    return {
-      x_norm: x, y_norm: y,
-      phase: cur.label,
-      done: tmod >= total - 50,
-      total_ms: total,
       dwell_pct: Math.min(into / DWELL_MS, 1),
     };
   };
@@ -234,11 +186,11 @@ function makeArenaPath(W, H) {
 
 function getPathFn(mode, W, H) {
   switch (mode) {
-    case 'numpad9':  return makeNumpad9Path(W, H);
-    case 'corners':  return makeCornersPath(W, H);
-    case 'fig8':     return makeFig8Path(W, H);
-    case 'box':      return makeBoxPath(W, H);
-    case 'arena':    return makeArenaPath(W, H);
+    case 'numpad9': return makeNumpad9Path(W, H);
+    case 'fig8':    return makeFig8Path(W, H);
+    case 'box':     return makeBoxPath(W, H);
+    case 'arena':   return makeArenaPath(W, H);
+    default:        return makeNumpad9Path(W, H);
   }
 }
 
@@ -249,7 +201,7 @@ function showScreen(id) {
 }
 
 function goHome() {
-  stopRecording();
+  stopRecordingSync();
   cancelAnimationFrame(state.animId);
   clearInterval(state.timerInterval);
   showScreen('home');
@@ -293,22 +245,13 @@ function startFlow(mode) {
 
 function startTrial() {
   showScreen('trial');
-  state.ballLog    = [];
+  state.ballLog     = [];
   state.videoChunks = [];
-  state.videoBlob  = null;
+  state.videoBlob   = null;
 
   const canvas = document.getElementById('trialCanvas');
   canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
-
-  const modeLabels = {
-    numpad9: '9-Point Calibration',
-    corners: 'Corner Calibration',
-    fig8:    'Figure-8 Lag Test',
-    box:     'Box Path',
-    arena:   'Arena Circle',
-  };
-  document.getElementById('trialPhase').textContent = modeLabels[state.mode] || state.mode;
 
   runCountdown(3, () => {
     startRecording();
@@ -322,14 +265,10 @@ function runCountdown(n, cb) {
   el.classList.remove('hidden');
 
   function tick(i) {
-    if (i === 0) {
-      el.classList.add('hidden');
-      cb();
-      return;
-    }
+    if (i === 0) { el.classList.add('hidden'); cb(); return; }
     num.textContent = i;
     num.style.animation = 'none';
-    num.offsetHeight;
+    num.offsetHeight;  // reflow to restart CSS animation
     num.style.animation = '';
     setTimeout(() => tick(i - 1), 1000);
   }
@@ -358,13 +297,14 @@ function startRecording() {
       if (e.data && e.data.size > 0) state.videoChunks.push(e.data);
     };
     state.mediaRecorder.start(100);
-
-    const dot   = document.getElementById('recDot');
-    const label = document.getElementById('recLabel');
-    dot.classList.add('recording');
-    label.textContent = 'recording';
   } catch(e) {
     console.warn('MediaRecorder failed:', e);
+  }
+}
+
+function stopRecordingSync() {
+  if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
+    state.mediaRecorder.stop();
   }
 }
 
@@ -381,9 +321,6 @@ function stopRecording() {
       resolve();
     };
     state.mediaRecorder.stop();
-    document.getElementById('recDot').classList.remove('recording');
-    document.getElementById('recDot').classList.add('ready');
-    document.getElementById('recLabel').textContent = 'saved';
   });
 }
 
@@ -394,25 +331,26 @@ function runAnimation() {
   const W      = canvas.width;
   const H      = canvas.height;
   const pathFn = getPathFn(state.mode, W, H);
-
-  // Ball radius: ~2% of shorter dimension
   const BALL_R = Math.min(W, H) * 0.020;
+
+  // 9-point guide positions (same padding as makeNumpad9Path)
+  const PAD = 0.10;
+  const GUIDE_PTS = [
+    { x: PAD,       y: PAD     }, { x: 0.5,     y: PAD     }, { x: 1-PAD, y: PAD     },
+    { x: PAD,       y: 0.5     }, { x: 0.5,     y: 0.5     }, { x: 1-PAD, y: 0.5     },
+    { x: PAD,       y: 1-PAD   }, { x: 0.5,     y: 1-PAD   }, { x: 1-PAD, y: 1-PAD   },
+  ];
 
   state.t0 = performance.now();
 
-  // HUD elements – these live outside the canvas so they never occlude the ball
-  const timerEl = document.getElementById('recTimer');
-  const ctrEl   = document.getElementById('trialCounter');
-
   function frame() {
-    const now  = performance.now();
-    const t_ms = now - state.t0;
+    const t_ms = performance.now() - state.t0;
     const pos  = pathFn(t_ms);
 
     const x_px = pos.x_norm * W;
     const y_px = pos.y_norm * H;
 
-    // Log
+    // ── Log ──────────────────────────────────────────────────────────────
     state.ballLog.push({
       t_ms:   Math.round(t_ms),
       x_px:   Math.round(x_px * 10) / 10,
@@ -422,33 +360,20 @@ function runAnimation() {
       phase:  pos.phase,
     });
 
-    // ── Draw ───────────────────────────────────────────────────────────────
+    // ── Draw ──────────────────────────────────────────────────────────────
     ctx.clearRect(0, 0, W, H);
 
-    // White background for soft face illumination
+    // White background — provides soft fill light for face
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, W, H);
 
-    // ── 9-point guide dots (numpad9 mode only) ─────────────────────────────
+    // Guide crosshairs (numpad9 only) — very faint, never confused with target
     if (state.mode === 'numpad9') {
-      const PAD = 0.10;
-      const guidePositions = [
-        { x: PAD,       y: PAD       },
-        { x: 0.5,       y: PAD       },
-        { x: 1 - PAD,   y: PAD       },
-        { x: PAD,       y: 0.5       },
-        { x: 0.5,       y: 0.5       },
-        { x: 1 - PAD,   y: 0.5       },
-        { x: PAD,       y: 1 - PAD   },
-        { x: 0.5,       y: 1 - PAD   },
-        { x: 1 - PAD,   y: 1 - PAD   },
-      ];
-      guidePositions.forEach(p => {
-        const gx = p.x * W;
-        const gy = p.y * H;
-        ctx.strokeStyle = 'rgba(0,0,0,0.10)';
-        ctx.lineWidth   = 1;
-        const sz = BALL_R * 0.7;
+      ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+      ctx.lineWidth = 1;
+      const sz = BALL_R * 0.8;
+      GUIDE_PTS.forEach(p => {
+        const gx = p.x * W, gy = p.y * H;
         ctx.beginPath();
         ctx.moveTo(gx - sz, gy); ctx.lineTo(gx + sz, gy);
         ctx.moveTo(gx, gy - sz); ctx.lineTo(gx, gy + sz);
@@ -456,43 +381,40 @@ function runAnimation() {
       });
     }
 
-    // ── Dwell ring (shrinks to zero over the dwell period) ─────────────────
-    if (pos.dwell_pct !== undefined && pos.dwell_pct < 1) {
-      const ringR = BALL_R * (2.8 - 1.8 * pos.dwell_pct);
-      ctx.strokeStyle = `rgba(0,0,0,${0.18 * (1 - pos.dwell_pct)})`;
-      ctx.lineWidth   = 1.5;
+    // Arena guide circle
+    if (state.mode === 'arena') {
+      const r = Math.min(W, H) * 0.42;
+      ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 8]);
+      ctx.beginPath();
+      ctx.arc(W/2, H/2, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Dwell ring — shrinks as dwell_pct → 1, disappears when done dwelling
+    if (pos.dwell_pct < 0.98) {
+      const ringR = BALL_R * (2.6 - 1.6 * pos.dwell_pct);
+      ctx.strokeStyle = `rgba(0,0,0,${0.15 * (1 - pos.dwell_pct)})`;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(x_px, y_px, ringR, 0, Math.PI * 2);
       ctx.stroke();
     }
 
-    // ── Ball: solid black circle ───────────────────────────────────────────
+    // Black ball — maximum contrast on white
     ctx.fillStyle = '#000000';
     ctx.beginPath();
     ctx.arc(x_px, y_px, BALL_R, 0, Math.PI * 2);
     ctx.fill();
 
-    // ── Progress bar – very bottom of screen, 2 px tall ───────────────────
+    // Progress bar — 2px at very bottom, barely visible
     const pct = Math.min(t_ms / pos.total_ms, 1);
-    ctx.fillStyle = 'rgba(0,0,0,0.08)';
+    ctx.fillStyle = 'rgba(0,0,0,0.07)';
     ctx.fillRect(0, H - 2, W, 2);
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
     ctx.fillRect(0, H - 2, W * pct, 2);
-
-    // ── Point counter for numpad9 (tiny, bottom-left corner) ──────────────
-    if (state.mode === 'numpad9' && pos.point_total !== undefined) {
-      ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.font      = `${Math.round(BALL_R * 0.85)}px monospace`;
-      ctx.textAlign = 'left';
-      ctx.fillText(
-        `${pos.point_index + 1} / ${pos.point_total}  ${pos.phase}`,
-        12, H - 10
-      );
-    }
-
-    // ── HUD timer (DOM, outside canvas – no occlusion risk) ───────────────
-    timerEl.textContent = (t_ms / 1000).toFixed(1) + 's';
-    ctrEl.textContent   = state.ballLog.length + ' pts';
 
     if (pos.done) {
       stopTrial();
@@ -510,8 +432,6 @@ async function stopTrial() {
   cancelAnimationFrame(state.animId);
   clearInterval(state.timerInterval);
 
-  document.getElementById('trialPhase').textContent = 'Saving…';
-
   await stopRecording();
 
   const dur_s = state.ballLog.length > 0
@@ -520,7 +440,6 @@ async function stopTrial() {
 
   const modeLabels = {
     numpad9: '9-Point Cal.',
-    corners: 'Corner Cal.',
     fig8:    'Figure-8',
     box:     'Box Path',
     arena:   'Arena Circle',
@@ -541,10 +460,8 @@ async function stopTrial() {
     document.getElementById('exportVideoSize').textContent = 'Recording unavailable';
   }
 
-  document.getElementById('exportCSVRows').textContent =
-    state.ballLog.length + ' rows';
-
-  document.getElementById('resultsTitle').textContent = '✓ Trial saved';
+  document.getElementById('exportCSVRows').textContent = state.ballLog.length + ' rows';
+  document.getElementById('resultsTitle').textContent  = '✓ Trial saved';
 
   showScreen('results');
 }
@@ -567,13 +484,13 @@ function exportCSV() {
 
 function exportJSON() {
   const session = {
-    version:          2,
-    mode:             state.mode,
-    timestamp_iso:    new Date().toISOString(),
-    screen_w_px:      window.innerWidth,
-    screen_h_px:      window.innerHeight,
-    device_px_ratio:  window.devicePixelRatio || 1,
-    ball_log:         state.ballLog,
+    version:         2,
+    mode:            state.mode,
+    timestamp_iso:   new Date().toISOString(),
+    screen_w_px:     window.innerWidth,
+    screen_h_px:     window.innerHeight,
+    device_px_ratio: window.devicePixelRatio || 1,
+    ball_log:        state.ballLog,
   };
   const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
   downloadBlob(blob, `eyetrack_${state.mode}_${Date.now()}.json`);
@@ -582,8 +499,7 @@ function exportJSON() {
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a   = document.createElement('a');
-  a.href     = url;
-  a.download = filename;
+  a.href = url; a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
